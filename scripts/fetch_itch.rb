@@ -96,4 +96,5 @@ Dir.mktmpdir('itch') do |tmp|
   system('ruby', File.join(__dir__, 'build_svg_meta.rb'), File.join(opts[:dest], 'assets'))
   system('ruby', File.join(__dir__, 'patch_lazy_svg.rb'), File.join(opts[:dest], 'script.js'))
   system('ruby', File.join(__dir__, 'patch_lazy_audio.rb'), File.join(opts[:dest], 'script.js'))
+  system('ruby', File.join(__dir__, 'patch_framerate_cap.rb'), File.join(opts[:dest], 'script.js'))
 end

@@ -3,17 +3,37 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-fullscreen">
+  <meta name="apple-mobile-web-app-title" content="Bloons TD 5 Demo">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="preload" href="assets/project.json" as="fetch" crossorigin="anonymous">
+  <link rel="apple-touch-icon" href="icon.png">
   <!-- We only include this to explicitly loosen the CSP of various packager environments. It does not provide any security. -->
   <meta http-equiv="Content-Security-Policy" content="default-src * 'self' 'unsafe-inline' 'unsafe-eval' data: blob:">
   <title>Bloons TD 5 Demo v4</title>
   <style>
+    html, body {
+      width: 100%;
+      height: 100%;
+      height: 100dvh;
+      overflow: hidden;
+      overscroll-behavior: none;
+      touch-action: none;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-touch-callout: none;
+      -webkit-text-size-adjust: 100%;
+    }
     body {
       color: #ffffff;
       font-family: sans-serif;
       overflow: hidden;
       margin: 0;
       padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
     }
     :root, body.is-fullscreen {
       background-color: #000000;
@@ -36,6 +56,10 @@
       left: 0;
       width: 100%;
       height: 100%;
+      height: 100dvh;
+    }
+    #app canvas {
+      touch-action: none;
     }
     .screen {
       display: flex;
@@ -131,6 +155,40 @@
     .sc-canvas {
       cursor: auto;
     }
+    /* Touch devices: larger tap targets, keep clear of notches/rounded corners */
+    @media (pointer: coarse) {
+      .control-button {
+        width: 2.75rem;
+        height: 2.75rem;
+        padding: 0.5rem;
+      }
+      .standalone-fullscreen-button {
+        padding: 8px;
+      }
+      #app {
+        padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+        box-sizing: border-box;
+      }
+    }
+    #rotate-hint {
+      display: none;
+      position: fixed;
+      left: 50%;
+      bottom: calc(16px + env(safe-area-inset-bottom));
+      transform: translateX(-50%);
+      z-index: 10;
+      max-width: 90%;
+      padding: 10px 16px;
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.8);
+      border: 1px solid rgba(255, 255, 255, 0.5);
+      font-size: 14px;
+      text-align: center;
+      touch-action: manipulation;
+    }
+    @media (pointer: coarse) and (orientation: portrait) {
+      #rotate-hint:not(.dismissed) { display: block; }
+    }
     .sc-monitor-root[data-opcode^="data_"] .sc-monitor-value-color {
       background-color: #ff8c1a;
     }
@@ -147,6 +205,7 @@
 </head>
 <body>
   <div id="app"></div>
+  <div id="rotate-hint" role="status">Rotate your device to landscape for the best view (tap to dismiss)</div>
 
   <div id="launch" class="screen" hidden title="Click to start">
     <div class="green-flag">
@@ -173,7 +232,35 @@
     </details>
   </div>
 
+  <script>
+    if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    }
+  </script>
   <script src="script.js"></script>
+  <script>
+    // Mobile: stop page scroll, pull-to-refresh and pinch zoom from fighting the game
+    (function () {
+      const opts = { passive: false };
+      const block = (e) => { if (e.cancelable) e.preventDefault(); };
+      document.addEventListener('touchmove', block, opts);
+      document.addEventListener('gesturestart', block, opts);
+      document.addEventListener('gesturechange', block, opts);
+      document.addEventListener('contextmenu', block, opts);
+      let lastTouchEnd = 0;
+      document.addEventListener('touchend', (e) => {
+        const now = Date.now();
+        if (now - lastTouchEnd < 300 && e.cancelable) e.preventDefault(); // double-tap zoom
+        lastTouchEnd = now;
+      }, opts);
+      const hint = document.getElementById('rotate-hint');
+      if (hint) hint.addEventListener('click', () => hint.classList.add('dismissed'));
+      // Re-fit the stage when the mobile browser UI or orientation changes
+      const refit = () => window.dispatchEvent(new Event('resize'));
+      window.addEventListener('orientationchange', () => setTimeout(refit, 150));
+      if (window.visualViewport) window.visualViewport.addEventListener('resize', refit);
+    })();
+  </script>
   <script>
     const appElement = document.getElementById('app');
     const launchScreen = document.getElementById('launch');

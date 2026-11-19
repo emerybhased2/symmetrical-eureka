@@ -15,8 +15,11 @@
     maxTexture: 1024,        // 512 | 1024 | 2048
     interpolation: true,
     // Performance
-    targetFps: 30,           // 15 | 20 | 30 | 60 | 120
+    targetFps: 30,           // 15 | 20 | 30 | 60 | 120 | 150 | 300 | 450 | 600
     turbo: false,
+    // In-game fast forward: overrides the game's own `Fast Forward?` variable.
+    // 0 = don't override (the in-game 1x/2x button works normally).
+    inGameSpeed: 0,
     // Developer
     overlay: false,
     infiniteMoney: false,
@@ -197,6 +200,11 @@
         if (settings.infiniteMoney && Number(mv.value) < 99000) mv.value = 999999;
         lastMoney = Number(mv.value);
       }
+      // In-game fast forward override: peg the game's `Fast Forward?` variable
+      if (settings.inGameSpeed > 0) {
+        const ff = findStageVar('Fast Forward?');
+        if (ff && Number(ff.value) !== settings.inGameSpeed) ff.value = settings.inGameSpeed;
+      }
       // Lives
       const lv = findStageVar('lives');
       if (lv) {
@@ -214,7 +222,7 @@
   }
   function stopWatchdogsIfIdle() {
     if (settings.infiniteMoney || settings.godMode || settings.halfCash
-        || settings.doubleCash || settings.chimpsLite) return;
+        || settings.doubleCash || settings.chimpsLite || settings.inGameSpeed > 0) return;
     if (watchdogTimer) { clearInterval(watchdogTimer); watchdogTimer = null; }
   }
 
@@ -398,7 +406,19 @@
     // Performance
     const perf = h('section');
     perf.appendChild(h('h3', null, 'Performance'));
-    perf.appendChild(row('Fast forward',
+    perf.appendChild(row('In-game fast forward',
+      makeSelect('inGameSpeed', [
+        [0, 'Game default (toggle)'],
+        [1, '1x (locked)'],
+        [2, '2x (locked)'],
+        [3, '3x'],
+        [5, '5x'],
+        [10, '10x'],
+        [15, '15x'],
+        [20, '20x'],
+      ]),
+      'Overrides the game’s own Fast Forward? variable, which the game multiplies into bloon speed, wave timers, and projectile cooldowns. Higher values keep the engine running at normal cost — most useful for late waves.'));
+    perf.appendChild(row('Engine speed',
       makeSelect('targetFps', [
         [15, '0.5x (slow-mo)'],
         [30, '1x (normal)'],
@@ -409,10 +429,10 @@
         [450, '15x'],
         [600, '20x'],
       ]),
-      '30 Hz = 1x. 5x and above auto-enable turbo so the sim loop isn’t capped by rAF. Real speedup depends on how fast your device can run each tick — late waves will hit a CPU wall before 20x.'));
+      'Makes the Scratch VM tick faster. 5x and above auto-enable turbo. Real speedup is CPU-bound — pair with in-game FF for compound speed.'));
     perf.appendChild(row('Turbo mode',
       makeToggle('turbo'),
-      'Removes per-tick yielding. Implied at 5x and above.'));
+      'Removes per-tick yielding. Implied at engine 5x and above.'));
     panel.appendChild(perf);
 
     // Developer / cheats
@@ -518,8 +538,9 @@
     listeners.add((k) => {
       if (k === 'halfCash' || k === 'doubleCash') enforceExclusive(k);
       if (k === 'infiniteMoney' || k === 'godMode' || k === 'halfCash'
-          || k === 'doubleCash' || k === 'chimpsLite') {
-        if (settings[k]) startWatchdogs(); else stopWatchdogsIfIdle();
+          || k === 'doubleCash' || k === 'chimpsLite' || k === 'inGameSpeed') {
+        const active = (k === 'inGameSpeed') ? settings[k] > 0 : settings[k];
+        if (active) startWatchdogs(); else stopWatchdogsIfIdle();
       }
       if (k === 'overlay') ensureOverlay();
       if (k === 'passPlayEnabled') {
@@ -534,7 +555,7 @@
     ensureOverlay();
     renderSpectateBanner();
     if (settings.infiniteMoney || settings.godMode || settings.halfCash
-        || settings.doubleCash || settings.chimpsLite) startWatchdogs();
+        || settings.doubleCash || settings.chimpsLite || settings.inGameSpeed > 0) startWatchdogs();
     if (settings.passPlayEnabled) passPlayStart();
   });
 })();

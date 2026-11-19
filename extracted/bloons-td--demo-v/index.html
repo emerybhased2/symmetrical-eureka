@@ -532,8 +532,26 @@
         };
         setTimeout(step, 3000);
       };
-      // Phones are memory-tight: only prefetch the whole costume set on desktop-class devices
-      const trickleIfDesktop = () => { if (!matchMedia('(pointer: coarse)').matches) trickle(); };
+      // Download (not decode) every remaining costume file in the background, a few at a time,
+      // so first use in a level hits the local cache instead of waiting on the network.
+      const prefetchFiles = () => {
+        const urls = (window.__lazySkins || []).filter((s) => s && s._lazyUrl).map((s) => s._lazyUrl);
+        let next = 0;
+        const worker = async () => {
+          while (next < urls.length) {
+            const u = urls[next++];
+            try { await (await fetch(u, { priority: 'low' })).arrayBuffer(); } catch (e) {}
+          }
+        };
+        for (let i = 0; i < 4; i++) worker();
+      };
+      // Phones are memory/data-tight: only prefetch everything on desktop-class connections
+      const trickleIfDesktop = () => {
+        const conn = navigator.connection || {};
+        if (matchMedia('(pointer: coarse)').matches || conn.saveData) return;
+        prefetchFiles();
+        trickle();
+      };
       if (false) {
         scaffolding.start();
         trickleIfDesktop();

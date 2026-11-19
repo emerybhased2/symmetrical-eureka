@@ -428,7 +428,8 @@
         if (raw) Object.assign(__dtInit, JSON.parse(raw) || {});
       } catch (e) {}
 
-      vm.setTurboMode(!!__dtInit.turbo);
+      // At 5x and above the browser can't rAF that fast — turbo keeps the sim loop stepping
+      vm.setTurboMode(!!__dtInit.turbo || Number(__dtInit.targetFps) >= 150);
       if (vm.setInterpolation) vm.setInterpolation(!!__dtInit.interpolation);
       if (vm.setFramerate) vm.setFramerate(Number(__dtInit.targetFps) || 30);
       if (vm.renderer.setUseHighQualityRender) vm.renderer.setUseHighQualityRender(__dtInit.quality === 'high');

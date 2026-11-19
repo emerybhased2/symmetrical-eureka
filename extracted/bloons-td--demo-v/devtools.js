@@ -67,7 +67,8 @@
       }
       if (vm.setInterpolation) vm.setInterpolation(!!settings.interpolation);
       if (vm.setFramerate) vm.setFramerate(settings.targetFps);
-      if (vm.setTurboMode) vm.setTurboMode(!!settings.turbo);
+      // At 5x and above the browser can't rAF that fast — turbo keeps the sim loop stepping
+      if (vm.setTurboMode) vm.setTurboMode(!!settings.turbo || settings.targetFps >= 150);
     } catch (e) {
       console.warn('[devtools] apply failed:', e);
     }
@@ -397,12 +398,21 @@
     // Performance
     const perf = h('section');
     perf.appendChild(h('h3', null, 'Performance'));
-    perf.appendChild(row('Target FPS',
-      makeSelect('targetFps', [[15, '15'], [20, '20'], [30, '30 (normal)'], [60, '60'], [120, '120']]),
-      'The simulation rate. Higher = faster gameplay too.'));
+    perf.appendChild(row('Fast forward',
+      makeSelect('targetFps', [
+        [15, '0.5x (slow-mo)'],
+        [30, '1x (normal)'],
+        [60, '2x'],
+        [90, '3x'],
+        [150, '5x'],
+        [300, '10x'],
+        [450, '15x'],
+        [600, '20x'],
+      ]),
+      '30 Hz = 1x. 5x and above auto-enable turbo so the sim loop isn’t capped by rAF. Real speedup depends on how fast your device can run each tick — late waves will hit a CPU wall before 20x.'));
     perf.appendChild(row('Turbo mode',
       makeToggle('turbo'),
-      'Removes per-tick yielding. Game runs as fast as the CPU allows.'));
+      'Removes per-tick yielding. Implied at 5x and above.'));
     panel.appendChild(perf);
 
     // Developer / cheats

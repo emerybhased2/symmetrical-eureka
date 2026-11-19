@@ -92,4 +92,7 @@ Dir.mktmpdir('itch') do |tmp|
     n += 1
   end
   puts "Merged #{n} files into #{opts[:dest]}"
+  # Re-apply the lazy-loading optimisation (script.js was just overwritten)
+  system('ruby', File.join(__dir__, 'build_svg_meta.rb'), File.join(opts[:dest], 'assets'))
+  system('ruby', File.join(__dir__, 'patch_lazy_svg.rb'), File.join(opts[:dest], 'script.js'))
 end

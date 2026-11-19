@@ -513,17 +513,34 @@
     </script>
   <script>
     const run = async () => {
+      // Costume size index: lets costumes load lazily (see scripts/patch_lazy_svg.rb)
+      const metaPromise = fetch('./assets/svg-meta.json').then((r) => r.json()).catch(() => ({}));
       const projectData = await getProjectData();
+      window.__svgMeta = await metaPromise;
       await scaffolding.loadProject(projectData);
       setProgress(1);
       loadingScreen.hidden = true;
+      // Quietly fetch the remaining costumes in order, one at a time, while the game runs
+      const trickle = () => {
+        let i = 0;
+        const step = () => {
+          const list = window.__lazySkins || [];
+          while (i < list.length && !(list[i] && list[i]._lazyUrl)) i++;
+          if (i >= list.length) return;
+          list[i]._lazyLoad(true);
+          setTimeout(step, 80);
+        };
+        setTimeout(step, 3000);
+      };
       if (false) {
         scaffolding.start();
+        trickle();
       } else {
         launchScreen.hidden = false;
         launchScreen.addEventListener('click', () => {
           launchScreen.hidden = true;
           scaffolding.start();
+          trickle();
         });
         launchScreen.focus();
       }

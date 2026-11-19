@@ -1,0 +1,5 @@
+services:
+  - type: web
+    name: bloons-td5-demo
+    runtime: static
+    staticPublishPath: ./extracted/bloons-td--demo-v

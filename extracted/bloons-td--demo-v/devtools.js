@@ -21,6 +21,13 @@
     overlay: false,
     infiniteMoney: false,
     godMode: false,
+    // Modifier modes (BTD6-inspired, implemented as watchdogs on `money` / `lives`)
+    halfCash: false,
+    doubleCash: false,
+    chimpsLite: false,         // reload on any life lost
+    // Co-op
+    passPlayEnabled: false,
+    passPlayTurnSec: 60,
   };
   const LS_KEY = 'btd5_dt_settings';
 
@@ -165,24 +172,155 @@
     return h('div', { className: 'dt-row' }, h('div', null, label, h('small', null, `var: ${varName}`)), h('div', { style: { display: 'flex', gap: '6px' } }, inp, btn));
   }
 
-  // Watchdogs for infinite-money / god-mode
+  // Watchdogs for infinite-money / god-mode / modifier modes
   let watchdogTimer = null;
+  let lastMoney = null;
+  let lastLives = null;
   function startWatchdogs() {
     if (watchdogTimer) return;
+    const m = findStageVar('money'); if (m) lastMoney = Number(m.value);
+    const l = findStageVar('lives'); if (l) lastLives = Number(l.value);
     watchdogTimer = setInterval(() => {
-      if (settings.infiniteMoney) {
-        const v = findStageVar('money');
-        if (v && Number(v.value) < 99000) v.value = 999999;
+      // Money modifiers: react to increases only
+      const mv = findStageVar('money');
+      if (mv) {
+        const cur = Number(mv.value);
+        if (lastMoney != null && cur > lastMoney) {
+          const gain = cur - lastMoney;
+          if (settings.halfCash && !settings.infiniteMoney) {
+            mv.value = lastMoney + Math.max(0, Math.floor(gain / 2));
+          } else if (settings.doubleCash && !settings.infiniteMoney) {
+            mv.value = lastMoney + gain * 2;
+          }
+        }
+        if (settings.infiniteMoney && Number(mv.value) < 99000) mv.value = 999999;
+        lastMoney = Number(mv.value);
       }
-      if (settings.godMode) {
-        const v = findStageVar('lives');
-        if (v && Number(v.value) < 500) v.value = 999;
+      // Lives
+      const lv = findStageVar('lives');
+      if (lv) {
+        const cur = Number(lv.value);
+        if (settings.godMode && cur < 500) { lv.value = 999; lastLives = 999; }
+        else if (settings.chimpsLite && lastLives != null && cur < lastLives) {
+          // Lost a life under CHIMPS-lite: restart the project.
+          try { window.scaffolding.greenFlag(); } catch (e) {}
+          lastLives = Number(lv.value);
+        } else {
+          lastLives = cur;
+        }
       }
-    }, 500);
+    }, 150); // 6-7 Hz: fast enough to catch money changes before the game draws them next
   }
   function stopWatchdogsIfIdle() {
-    if (settings.infiniteMoney || settings.godMode) return;
+    if (settings.infiniteMoney || settings.godMode || settings.halfCash
+        || settings.doubleCash || settings.chimpsLite) return;
     if (watchdogTimer) { clearInterval(watchdogTimer); watchdogTimer = null; }
+  }
+
+  // Make the money modifiers mutually exclusive in the UI
+  function enforceExclusive(k) {
+    const groups = { cash: ['halfCash', 'doubleCash'] };
+    for (const group of Object.values(groups)) {
+      if (group.includes(k)) {
+        for (const other of group) if (other !== k && settings[other]) setSetting(other, false);
+      }
+    }
+  }
+
+  // --- Game modes & co-op helpers -------------------------------------------
+  function broadcast(name) {
+    try {
+      const vm = window.vm; if (!vm || !vm.runtime) return;
+      vm.runtime.startHats('event_whenbroadcastreceived', { BROADCAST_OPTION: name });
+    } catch (e) { console.warn('[devtools] broadcast', name, e); }
+  }
+
+  // Pass & Play state (same-device turn-based)
+  let ppTimer = null;
+  let ppEndsAt = 0;
+  let ppTurn = 1;
+  let ppBadge = null;
+  function passPlayEnsureBadge() {
+    if (ppBadge) return ppBadge;
+    ppBadge = h('div', { id: 'dt-pp-badge' });
+    Object.assign(ppBadge.style, {
+      position: 'fixed', bottom: 'calc(16px + env(safe-area-inset-bottom))',
+      left: '50%', transform: 'translateX(-50%)', zIndex: 60,
+      padding: '8px 16px', borderRadius: '999px',
+      background: 'rgba(0,0,0,0.8)', border: '1px solid rgba(255,255,255,0.3)',
+      color: '#fff', font: '13px system-ui', pointerEvents: 'auto', cursor: 'pointer',
+    });
+    ppBadge.onclick = () => {
+      // Click badge to skip/pass immediately
+      ppEndsAt = Date.now();
+    };
+    document.body.appendChild(ppBadge);
+    return ppBadge;
+  }
+  function passPlayStop() {
+    if (ppTimer) { clearInterval(ppTimer); ppTimer = null; }
+    if (ppBadge) { ppBadge.remove(); ppBadge = null; }
+    try { if (window.vm && window.vm.setPaused) window.vm.setPaused(false); } catch (e) {}
+  }
+  function passPlayStart() {
+    passPlayStop();
+    ppTurn = 1;
+    const beginTurn = () => {
+      ppEndsAt = Date.now() + Math.max(10, settings.passPlayTurnSec) * 1000;
+      try { if (window.vm && window.vm.setPaused) window.vm.setPaused(false); } catch (e) {}
+    };
+    beginTurn();
+    passPlayEnsureBadge();
+    ppTimer = setInterval(() => {
+      if (!settings.passPlayEnabled) { passPlayStop(); return; }
+      const remain = Math.max(0, Math.ceil((ppEndsAt - Date.now()) / 1000));
+      ppBadge.textContent = `P${ppTurn}'s turn — ${remain}s (tap to pass)`;
+      if (remain === 0) {
+        try { if (window.vm && window.vm.setPaused) window.vm.setPaused(true); } catch (e) {}
+        const next = ppTurn === 1 ? 2 : 1;
+        ppBadge.textContent = `Pass to P${next} — tap to begin`;
+        ppBadge.onclick = () => {
+          ppTurn = next;
+          ppBadge.onclick = () => { ppEndsAt = Date.now(); };
+          beginTurn();
+        };
+      }
+    }, 250);
+  }
+
+  // Spectate link: encodes the current game state (round/money/lives) in a URL fragment
+  function makeSpectateLink() {
+    const money = findStageVar('money'), lives = findStageVar('lives'), round = findStageVar('round');
+    const snap = {
+      t: Date.now(),
+      round: round ? round.value : null,
+      money: money ? money.value : null,
+      lives: lives ? lives.value : null,
+    };
+    const u = new URL(location.href);
+    u.hash = 'watch=' + btoa(JSON.stringify(snap));
+    return u.toString();
+  }
+  function renderSpectateBanner() {
+    if (!location.hash.startsWith('#watch=')) return;
+    try {
+      const snap = JSON.parse(atob(location.hash.slice('#watch='.length)));
+      const age = Math.round((Date.now() - (snap.t || 0)) / 1000);
+      const b = h('div', { id: 'dt-watch' }, `Watching snapshot — Round ${snap.round}, $${snap.money}, ${snap.lives} lives (${age}s ago)`);
+      Object.assign(b.style, {
+        position: 'fixed', top: '0', left: '0', right: '0', zIndex: 101,
+        padding: '8px 48px 8px 16px', background: 'rgba(59,130,246,0.95)', color: '#fff',
+        font: '12px system-ui', textAlign: 'center',
+      });
+      const x = h('button', { type: 'button' }, '×');
+      Object.assign(x.style, {
+        position: 'absolute', right: '8px', top: '4px', background: 'transparent',
+        border: 'none', color: '#fff', fontSize: '18px', cursor: 'pointer',
+      });
+      x.onclick = () => { b.remove(); location.hash = ''; };
+      b.appendChild(x);
+      document.body.appendChild(b);
+    } catch (e) {}
   }
 
   // FPS / stats overlay
@@ -294,6 +432,62 @@
     dev.appendChild(stats);
     panel.appendChild(dev);
 
+    // Game Modes (BTD5 demo's own difficulty broadcasts, exposed as quick-launch buttons)
+    const modes = h('section');
+    modes.appendChild(h('h3', null, 'Game Modes'));
+    modes.appendChild(h('p', { className: 'dt-sub', style: { margin: '-6px 0 10px' } },
+      'Broadcasts the game’s built-in mode events. If a button only opens a confirm dialog, click Play there.'));
+    const modeGrid = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px' } });
+    for (const [name, label] of [
+      ['easy', 'Easy'], ['medium', 'Medium'], ['hard', 'Hard'],
+      ['impoppable', 'Impoppable'], ['apopalypse', 'Apopalypse'],
+      ['deflation', 'Deflation'], ['sandbox', 'Sandbox'], ['Freeplay', 'Freeplay'],
+    ]) {
+      const b = h('button', { type: 'button' }, label);
+      b.onclick = () => broadcast(name);
+      modeGrid.appendChild(b);
+    }
+    modes.appendChild(modeGrid);
+    panel.appendChild(modes);
+
+    // Modifier Modes (BTD6-inspired, implemented client-side on money/lives)
+    const mods = h('section');
+    mods.appendChild(h('h3', null, 'Modifier Modes'));
+    mods.appendChild(h('p', { className: 'dt-sub', style: { margin: '-6px 0 10px' } },
+      'BTD6-style modifiers approximated by watching the money/lives variables.'));
+    mods.appendChild(row('Half Cash', makeToggle('halfCash'), 'Halves any money gain.'));
+    mods.appendChild(row('Double Cash', makeToggle('doubleCash'), 'Doubles any money gain.'));
+    mods.appendChild(row('CHIMPS lite', makeToggle('chimpsLite'),
+      'Restart the project the moment you lose a life. (Powers, Continues, Selling, Monkey Knowledge are already absent in the demo.)'));
+    panel.appendChild(mods);
+
+    // Co-op
+    const coop = h('section');
+    coop.appendChild(h('h3', null, 'Co-op'));
+    coop.appendChild(h('div', { className: 'dt-note' },
+      'BTD6-style real-time co-op (shared economy, shared bloons, multiple inputs on one game) requires the game engine to be built for it; this Scratch project isn’t. ',
+      'What works here: Pass & Play on one device, and a snapshot link your friend can open on theirs.'
+    ));
+    coop.appendChild(row('Pass & Play', makeToggle('passPlayEnabled'),
+      'Two players alternate turns on this device. Game pauses at the end of each turn.'));
+    const turnLenInp = h('input', { type: 'number', min: 10, max: 600, value: String(settings.passPlayTurnSec) });
+    turnLenInp.onchange = () => {
+      const n = Math.max(10, Math.min(600, Number(turnLenInp.value) || 60));
+      turnLenInp.value = String(n);
+      setSetting('passPlayTurnSec', n);
+    };
+    coop.appendChild(row('Turn length (sec)', turnLenInp));
+    const watchBtn = h('button', { type: 'button' }, 'Copy spectate link');
+    watchBtn.onclick = async () => {
+      const url = makeSpectateLink();
+      try { await navigator.clipboard.writeText(url); watchBtn.textContent = 'Copied ✓'; }
+      catch (e) { prompt('Spectate link (copy):', url); watchBtn.textContent = 'Link shown'; }
+      setTimeout(() => (watchBtn.textContent = 'Copy spectate link'), 1500);
+    };
+    coop.appendChild(row('Spectate snapshot', watchBtn,
+      'Sends a one-off round/money/lives snapshot in the URL. Not live.'));
+    panel.appendChild(coop);
+
     // Mod Helper disclosure
     const note = h('section');
     note.appendChild(h('h3', null, 'About "BTD6 Mod Helper"'));
@@ -310,12 +504,17 @@
     toggle.onclick = () => panel.classList.toggle('open');
     document.body.appendChild(toggle);
 
-    // Keep watchdogs in sync with toggles
+    // Keep watchdogs & co-op state in sync with toggles
     listeners.add((k) => {
-      if (k === 'infiniteMoney' || k === 'godMode') {
+      if (k === 'halfCash' || k === 'doubleCash') enforceExclusive(k);
+      if (k === 'infiniteMoney' || k === 'godMode' || k === 'halfCash'
+          || k === 'doubleCash' || k === 'chimpsLite') {
         if (settings[k]) startWatchdogs(); else stopWatchdogsIfIdle();
       }
       if (k === 'overlay') ensureOverlay();
+      if (k === 'passPlayEnabled') {
+        if (settings[k]) passPlayStart(); else passPlayStop();
+      }
     });
   }
 
@@ -323,6 +522,9 @@
     apply();
     buildPanel();
     ensureOverlay();
-    if (settings.infiniteMoney || settings.godMode) startWatchdogs();
+    renderSpectateBanner();
+    if (settings.infiniteMoney || settings.godMode || settings.halfCash
+        || settings.doubleCash || settings.chimpsLite) startWatchdogs();
+    if (settings.passPlayEnabled) passPlayStart();
   });
 })();

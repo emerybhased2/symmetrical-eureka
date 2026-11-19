@@ -421,9 +421,11 @@
       }
 
       vm.setTurboMode(false);
-      if (vm.setInterpolation) vm.setInterpolation(false);
+      // Smoother motion between the project's 30 Hz ticks, up to the display's refresh rate
+      if (vm.setInterpolation) vm.setInterpolation(true);
       if (vm.setFramerate) vm.setFramerate(30);
-      if (vm.renderer.setUseHighQualityRender) vm.renderer.setUseHighQualityRender(true);
+      // High-quality SVG rendering is costly per draw; nearest-neighbour MIPs still look fine
+      if (vm.renderer.setUseHighQualityRender) vm.renderer.setUseHighQualityRender(false);
       if (vm.setRuntimeOptions) vm.setRuntimeOptions({
         fencing: false,
         miscLimits: true,
@@ -433,7 +435,8 @@
         enabled: true,
         warpTimer: false
       });
-      if (vm.renderer.setMaxTextureDimension) vm.renderer.setMaxTextureDimension(2048);
+      // 2048 drives the biggest SVGs to huge textures at high zoom; 1024 is plenty for this art
+      if (vm.renderer.setMaxTextureDimension) vm.renderer.setMaxTextureDimension(1024);
 
       // enforcePrivacy threat model only makes sense in the editor
       if (vm.runtime.setEnforcePrivacy) vm.runtime.setEnforcePrivacy(false);

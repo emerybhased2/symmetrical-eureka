@@ -297,6 +297,43 @@
     }, 250);
   }
 
+  // --- BTD6 Map Reference ----------------------------------------------------
+  // Data is bundled at ./btd6_maps.json, produced by scripts/fetch_btd6_maps.py.
+  let btd6MapCache = null;
+  async function loadBtd6Maps() {
+    if (btd6MapCache !== null) return btd6MapCache;
+    try {
+      const r = await fetch('./btd6_maps.json');
+      if (!r.ok) throw new Error(String(r.status));
+      btd6MapCache = await r.json();
+    } catch (e) {
+      btd6MapCache = { error: String(e) };
+    }
+    return btd6MapCache;
+  }
+  function primaryDifficulty(m) {
+    if (!m || !m.difficulty) return 'Unknown';
+    if (typeof m.difficulty === 'string') return m.difficulty;
+    // conflict: pick the first-seen source's reading as the primary
+    const vals = Object.values(m.difficulty).filter(Boolean);
+    return vals[0] || 'Unknown';
+  }
+  let challengeEl = null;
+  function showChallenge(map) {
+    if (challengeEl) challengeEl.remove();
+    const diff = primaryDifficulty(map);
+    const extra = map.extra || {};
+    const sbExtra = extra.superbot || {};
+    challengeEl = h('div', { id: 'dt-challenge' },
+      h('span', { className: 'dt-badge dt-diff-' + diff.toLowerCase() }, diff),
+      h('span', null, 'Challenge: ' + map.name),
+      sbExtra.has_water ? h('span', { className: 'dt-map-meta' }, '· water') : null,
+      h('button', { type: 'button', title: 'dismiss' }, '×'),
+    );
+    challengeEl.querySelector('button').onclick = () => { challengeEl.remove(); challengeEl = null; };
+    document.body.appendChild(challengeEl);
+  }
+
   // Spectate link: encodes the current game state (round/money/lives) in a URL fragment
   function makeSpectateLink() {
     const money = findStageVar('money'), lives = findStageVar('lives'), round = findStageVar('round');
@@ -517,6 +554,78 @@
     coop.appendChild(row('Spectate snapshot', watchBtn,
       'Sends a one-off round/money/lives snapshot in the URL. Not live.'));
     panel.appendChild(coop);
+
+    // BTD6 Map Reference (data bundled from scripts/fetch_btd6_maps.py)
+    const mapRef = h('section');
+    mapRef.appendChild(h('h3', null, 'BTD6 Map Reference'));
+    mapRef.appendChild(h('div', { className: 'dt-note' },
+      'These are the real BTD6 map names and difficulty ratings, pulled from three public GitHub sources. ',
+      'Not playable in this Scratch demo — the demo’s tracks are its own — but useful as a reference or as a thematic challenge target.'
+    ));
+    const search = h('input', { type: 'text', placeholder: 'Search by name…' });
+    const diffSelect = h('select');
+    for (const d of ['All', 'Beginner', 'Intermediate', 'Advanced', 'Expert']) {
+      diffSelect.appendChild(h('option', { value: d }, d));
+    }
+    mapRef.appendChild(h('div', { className: 'dt-map-controls' }, search, diffSelect));
+    const list = h('div', { className: 'dt-map-list' });
+    mapRef.appendChild(list);
+    const randomBtn = h('button', { type: 'button' }, 'Pick a random map');
+    mapRef.appendChild(row('Thematic challenge', randomBtn,
+      'Picks a random BTD6 map and shows it as a goal banner over the game.'));
+    const refreshNote = h('p', { className: 'dt-sub', style: { margin: '8px 0 0' } },
+      'Data snapshot bundled at ./btd6_maps.json. To refresh: run scripts/update_btd6_maps.sh');
+    mapRef.appendChild(refreshNote);
+    panel.appendChild(mapRef);
+
+    // Populate the map list once data loads
+    loadBtd6Maps().then((data) => {
+      if (!data || data.error) {
+        list.appendChild(h('div', { className: 'dt-map-empty' },
+          'Map data could not be loaded (' + (data && data.error ? data.error : 'unknown') + '). ',
+          'Run scripts/update_btd6_maps.sh to generate btd6_maps.json.'));
+        randomBtn.disabled = true;
+        return;
+      }
+      const maps = data.maps || [];
+      const renderList = () => {
+        list.innerHTML = '';
+        const q = search.value.trim().toLowerCase();
+        const want = diffSelect.value;
+        let shown = 0;
+        for (const m of maps) {
+          const diff = primaryDifficulty(m);
+          if (want !== 'All' && diff !== want) continue;
+          if (q && !m.name.toLowerCase().includes(q)) continue;
+          const extra = (m.extra && m.extra.superbot) || {};
+          const isConflict = typeof m.difficulty === 'object';
+          const badgeCls = 'dt-badge dt-diff-' + (isConflict ? 'mixed' : diff.toLowerCase());
+          const item = h('div', { className: 'dt-map' },
+            h('span', { className: badgeCls, title: isConflict ? 'Sources disagree' : diff }, diff.substr(0, 3)),
+            h('span', { className: 'dt-map-name' }, m.name),
+            extra.has_water ? h('span', { className: 'dt-map-meta', title: 'has water tiles' }, '~') : null,
+          );
+          item.onclick = () => showChallenge(m);
+          list.appendChild(item);
+          shown++;
+        }
+        if (shown === 0) {
+          list.appendChild(h('div', { className: 'dt-map-empty' }, 'No maps match.'));
+        }
+      };
+      search.oninput = renderList;
+      diffSelect.onchange = renderList;
+      randomBtn.onclick = () => {
+        const filtered = maps.filter((m) => {
+          if (diffSelect.value !== 'All' && primaryDifficulty(m) !== diffSelect.value) return false;
+          const q = search.value.trim().toLowerCase();
+          return !q || m.name.toLowerCase().includes(q);
+        });
+        const pool = filtered.length ? filtered : maps;
+        showChallenge(pool[Math.floor(Math.random() * pool.length)]);
+      };
+      renderList();
+    });
 
     // Mod Helper disclosure
     const note = h('section');

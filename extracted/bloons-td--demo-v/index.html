@@ -532,15 +532,17 @@
         };
         setTimeout(step, 3000);
       };
+      // Phones are memory-tight: only prefetch the whole costume set on desktop-class devices
+      const trickleIfDesktop = () => { if (!matchMedia('(pointer: coarse)').matches) trickle(); };
       if (false) {
         scaffolding.start();
-        trickle();
+        trickleIfDesktop();
       } else {
         launchScreen.hidden = false;
         launchScreen.addEventListener('click', () => {
           launchScreen.hidden = true;
           scaffolding.start();
-          trickle();
+          trickleIfDesktop();
         });
         launchScreen.focus();
       }

@@ -9,6 +9,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-fullscreen">
   <meta name="apple-mobile-web-app-title" content="Bloons TD 5 Demo">
   <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="devtools.css">
   <link rel="preload" href="assets/project.json" as="fetch" crossorigin="anonymous">
   <link rel="apple-touch-icon" href="icon.png">
   <!-- We only include this to explicitly loosen the CSP of various packager environments. It does not provide any security. -->
@@ -420,12 +421,17 @@
         }
       }
 
-      vm.setTurboMode(false);
-      // Smoother motion between the project's 30 Hz ticks, up to the display's refresh rate
-      if (vm.setInterpolation) vm.setInterpolation(true);
-      if (vm.setFramerate) vm.setFramerate(30);
-      // High-quality SVG rendering is costly per draw; nearest-neighbour MIPs still look fine
-      if (vm.renderer.setUseHighQualityRender) vm.renderer.setUseHighQualityRender(false);
+      // Read any saved settings from the devtools panel so startup matches the UI
+      let __dtInit = { quality: 'low', maxTexture: 1024, interpolation: true, targetFps: 30, turbo: false };
+      try {
+        const raw = localStorage.getItem('btd5_dt_settings');
+        if (raw) Object.assign(__dtInit, JSON.parse(raw) || {});
+      } catch (e) {}
+
+      vm.setTurboMode(!!__dtInit.turbo);
+      if (vm.setInterpolation) vm.setInterpolation(!!__dtInit.interpolation);
+      if (vm.setFramerate) vm.setFramerate(Number(__dtInit.targetFps) || 30);
+      if (vm.renderer.setUseHighQualityRender) vm.renderer.setUseHighQualityRender(__dtInit.quality === 'high');
       if (vm.setRuntimeOptions) vm.setRuntimeOptions({
         fencing: false,
         miscLimits: true,
@@ -435,8 +441,7 @@
         enabled: true,
         warpTimer: false
       });
-      // 2048 drives the biggest SVGs to huge textures at high zoom; 1024 is plenty for this art
-      if (vm.renderer.setMaxTextureDimension) vm.renderer.setMaxTextureDimension(1024);
+      if (vm.renderer.setMaxTextureDimension) vm.renderer.setMaxTextureDimension(Number(__dtInit.maxTexture) || 1024);
 
       // enforcePrivacy threat model only makes sense in the editor
       if (vm.runtime.setEnforcePrivacy) vm.runtime.setEnforcePrivacy(false);
@@ -570,5 +575,6 @@
     };
     run().catch(handleError);
   </script>
+  <script src="devtools.js"></script>
 </body>
 </html>

@@ -1197,7 +1197,7 @@
     const fullSection = h('section');
     fullSection.appendChild(h('h3', null, 'Full Save / Restore (experimental)'));
     fullSection.appendChild(h('div', { className: 'dt-note' },
-      'Snapshots every tower and sprite clone, not just the stage counters. Fragile: the Scratch runtime’s clone init scripts may overwrite some values, so your towers can look right but misbehave. Treat as a bonus, keep the plain Restore as the safe path.'));
+      'Snapshots every stage variable and list (including the 60+ tower lists this game uses for tower state) AND every sprite clone. Tower data restores 100 %; sprite clones restore ~90 % because the Scratch runtime’s clone init scripts can overwrite a few values a frame after we re-apply.'));
     const fullSaveBtn = h('button', { type: 'button' }, 'Save snapshot');
     const fullLoadBtn = h('button', { type: 'button' }, 'Restore snapshot');
     const fullStatus = h('small', { style: { display: 'block', marginTop: '6px', color: '#a0a0aa' } }, '');

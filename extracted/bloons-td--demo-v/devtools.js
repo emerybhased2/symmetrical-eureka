@@ -211,9 +211,12 @@
         const cur = Number(lv.value);
         if (settings.godMode && cur < 500) { lv.value = 999; lastLives = 999; }
         else if (settings.chimpsLite && lastLives != null && cur < lastLives) {
-          // Lost a life under CHIMPS-lite: restart the project.
-          try { window.scaffolding.greenFlag(); } catch (e) {}
-          lastLives = Number(lv.value);
+          // Lost a life under CHIMPS-lite: show a failure banner and disable the
+          // mode. The game keeps going so the player can see where they stood.
+          const rv = findStageVar('round');
+          showChimpsFailure(Number(rv && rv.value) || 0, lastLives - cur);
+          setSetting('chimpsLite', false);
+          lastLives = cur;
         } else {
           lastLives = cur;
         }
@@ -234,6 +237,25 @@
         for (const other of group) if (other !== k && settings[other]) setSetting(other, false);
       }
     }
+  }
+
+  // --- CHIMPS failure banner (non-destructive replacement for auto-restart) --
+  let chimpsFailEl = null;
+  function showChimpsFailure(round, lost) {
+    if (chimpsFailEl) chimpsFailEl.remove();
+    chimpsFailEl = h('div', { id: 'dt-chimps-fail' },
+      h('strong', null, 'CHIMPS FAILED'),
+      h('div', { className: 'dt-sub', style: { color: '#fecaca', margin: '2px 0 6px' } },
+        `Lost ${lost} life${lost === 1 ? '' : 's'}${round > 0 ? ' on round ' + round : ''}. CHIMPS lite turned off.`),
+      h('button', { type: 'button' }, 'Dismiss')
+    );
+    chimpsFailEl.querySelector('button').onclick = () => {
+      if (chimpsFailEl) { chimpsFailEl.remove(); chimpsFailEl = null; }
+    };
+    document.body.appendChild(chimpsFailEl);
+    setTimeout(() => {
+      if (chimpsFailEl) { chimpsFailEl.remove(); chimpsFailEl = null; }
+    }, 7000);
   }
 
   // --- Game modes & co-op helpers -------------------------------------------
@@ -439,11 +461,16 @@
     }
     // Stats transitions
     const stats = loadStats();
+    const pergame = loadPerGame();
     // A real game-start: round went from 0 to 1 (ignores cheat-set rounds).
     if (lastTickRound === 0 && round === 1 && !gameRunning) {
       gameRunning = true;
       stats.gamesPlayed += 1;
       stats.lastPlayedAt = now;
+      pergame.startingLives = lives;
+      pergame.livesLost = 0;
+      pergame.lastLives = lives;
+      savePerGame(pergame);
     }
     // Game end: round rolled back to 0, or lives hit 0.
     if (gameRunning && (round === 0 || lives === 0)) {
@@ -453,8 +480,15 @@
       stats.totalTimePlayed += dt;
       if (round > stats.highestRound) stats.highestRound = round;
       if (wave > stats.highestWave) stats.highestWave = wave;
+      // Per-game: track lives lost this run
+      if (typeof pergame.lastLives === 'number' && lives < pergame.lastLives) {
+        pergame.livesLost = (pergame.livesLost || 0) + (pergame.lastLives - lives);
+      }
+      pergame.lastLives = lives;
+      savePerGame(pergame);
     }
     saveStats(stats);
+    checkAchievements({ vars, stats, pergame, now });
     lastTickRound = round;
   }
   function startAutosave() {
@@ -463,6 +497,264 @@
     lastTickRound = 0;
     gameRunning = false;
     autosaveTimer = setInterval(autoTick, 5000);
+  }
+
+  // --- Achievements ----------------------------------------------------------
+  // Unlocked achievements are stored as { id: timestamp }. Checks run in the
+  // same autoTick() pass as stats, so there's no extra polling.
+  const ACH_KEY = 'btd5_achievements_v1';
+  const PERGAME_KEY = 'btd5_pergame_v1'; // transient per-game bookkeeping
+  const ACHIEVEMENTS = [
+    { id: 'first_game',    name: 'Here We Go',         desc: 'Start your first game.' },
+    { id: 'round_25',      name: 'Getting Warm',       desc: 'Reach round 25.' },
+    { id: 'round_40',      name: 'Impressive',         desc: 'Reach round 40.' },
+    { id: 'round_50',      name: 'Beat the Demo',      desc: 'Reach round 50.' },
+    { id: 'round_75',      name: 'Overachiever',       desc: 'Reach round 75.' },
+    { id: 'round_100',     name: 'Centennial',         desc: 'Reach round 100.' },
+    { id: 'games_10',      name: 'Dedicated',          desc: 'Play 10 games.' },
+    { id: 'time_1hr',      name: 'An Hour Well Spent', desc: 'Play for 1 hour total.' },
+    { id: 'time_10hr',     name: 'Super Fan',          desc: 'Play for 10 hours total.' },
+    { id: 'no_hit_50',     name: 'Flawless',           desc: 'Beat round 50 without losing any lives.' },
+    { id: 'high_roller',   name: 'High Roller',        desc: 'Hold $100,000 at once.' },
+    { id: 'cheat_lord',    name: 'Cheat Lord',         desc: 'Enable Infinite Money and God Mode together.' },
+    { id: 'cotd_done',     name: 'Daily Dose',         desc: 'Complete a Challenge of the Day.' },
+    { id: 'cotd_streak_7', name: 'Streak Keeper',      desc: 'Complete the Daily for 7 days in a row.' },
+  ];
+  function loadAchievements() {
+    try { return JSON.parse(localStorage.getItem(ACH_KEY)) || {}; } catch (e) { return {}; }
+  }
+  function saveAchievements(a) {
+    try { localStorage.setItem(ACH_KEY, JSON.stringify(a)); } catch (e) {}
+  }
+  function loadPerGame() {
+    try { return JSON.parse(localStorage.getItem(PERGAME_KEY)) || {}; } catch (e) { return {}; }
+  }
+  function savePerGame(d) {
+    try { localStorage.setItem(PERGAME_KEY, JSON.stringify(d)); } catch (e) {}
+  }
+  function unlockAchievement(id) {
+    const ach = loadAchievements();
+    if (ach[id]) return false;
+    ach[id] = Date.now();
+    saveAchievements(ach);
+    showAchievementToast(id);
+    return true;
+  }
+  function checkAchievements({ vars, stats, pergame, now }) {
+    const money = Number(vars.money) || 0;
+    const round = Number(vars.round) || 0;
+    if (stats.gamesPlayed >= 1) unlockAchievement('first_game');
+    if (round >= 25) unlockAchievement('round_25');
+    if (round >= 40) unlockAchievement('round_40');
+    if (round >= 50) unlockAchievement('round_50');
+    if (round >= 75) unlockAchievement('round_75');
+    if (round >= 100) unlockAchievement('round_100');
+    if (stats.gamesPlayed >= 10) unlockAchievement('games_10');
+    if (stats.totalTimePlayed >= 3600) unlockAchievement('time_1hr');
+    if (stats.totalTimePlayed >= 36000) unlockAchievement('time_10hr');
+    if (money >= 100000) unlockAchievement('high_roller');
+    if (settings.infiniteMoney && settings.godMode) unlockAchievement('cheat_lord');
+    if (round >= 50 && pergame.livesLost === 0 && pergame.startingLives > 0) {
+      unlockAchievement('no_hit_50');
+    }
+  }
+  function showAchievementToast(id) {
+    const def = ACHIEVEMENTS.find((a) => a.id === id);
+    if (!def) return;
+    const el = h('div', { className: 'dt-achievement-toast' },
+      h('div', { className: 'dt-ach-icon' }, '🏆'),
+      h('div', null,
+        h('div', { className: 'dt-ach-title' }, 'Achievement unlocked'),
+        h('div', { className: 'dt-ach-name' }, def.name),
+        h('div', { className: 'dt-ach-desc' }, def.desc)));
+    document.body.appendChild(el);
+    requestAnimationFrame(() => el.classList.add('dt-ach-show'));
+    setTimeout(() => {
+      el.classList.remove('dt-ach-show');
+      setTimeout(() => el.remove(), 400);
+    }, 4500);
+  }
+
+  // --- Challenge of the Day --------------------------------------------------
+  // Deterministic: seed = hash of today's YYYY-MM-DD, so everyone with the same
+  // date sees the same map / modifiers / round goal. Completion is per-day.
+  const COTD_KEY = 'btd5_cotd_v1';
+  const COTD_GOALS = [20, 30, 40, 50, 60, 75, 100];
+  const COTD_MOD_POOL = ['half_cash', 'double_cash', 'chimps_lite', 'no_fast_forward', 'low_lives'];
+  function todayKey() { return new Date().toISOString().slice(0, 10); }
+  function mulberry32(a) {
+    return function () {
+      let t = (a += 0x6D2B79F5);
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function hashString(s) {
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    return h;
+  }
+  async function rollChallengeOfTheDay() {
+    const data = await loadBtd6Maps();
+    if (!data || data.error || !data.maps || !data.maps.length) return null;
+    const key = todayKey();
+    const rng = mulberry32(hashString(key));
+    const map = data.maps[Math.floor(rng() * data.maps.length)];
+    const diff = primaryDifficulty(map);
+    const goal = COTD_GOALS[Math.floor(rng() * COTD_GOALS.length)];
+    const mods = [];
+    // Gentler for Expert/Advanced, harsher for Beginner/Intermediate
+    const bias = diff === 'Expert' ? 0.2 : diff === 'Advanced' ? 0.3 : 0.5;
+    for (const m of COTD_MOD_POOL) {
+      if (rng() < bias) mods.push(m);
+    }
+    if (mods.length > 2) mods.length = 2; // cap at 2 modifiers
+    return { date: key, map, difficulty: diff, goal, modifiers: mods };
+  }
+  function loadCotdState() {
+    try { return JSON.parse(localStorage.getItem(COTD_KEY)) || {}; } catch (e) { return {}; }
+  }
+  function saveCotdState(s) {
+    try { localStorage.setItem(COTD_KEY, JSON.stringify(s)); } catch (e) {}
+  }
+  function cotdStreak() {
+    const state = loadCotdState();
+    let n = 0;
+    const d = new Date();
+    for (let i = 0; i < 365; i++) {
+      const k = d.toISOString().slice(0, 10);
+      if (state[k] && state[k].completed) { n++; d.setDate(d.getDate() - 1); }
+      else break;
+    }
+    return n;
+  }
+  function markCotdComplete() {
+    const state = loadCotdState();
+    const k = todayKey();
+    state[k] = { completed: true, at: Date.now() };
+    saveCotdState(state);
+    unlockAchievement('cotd_done');
+    if (cotdStreak() >= 7) unlockAchievement('cotd_streak_7');
+  }
+  const COTD_MOD_LABELS = {
+    half_cash: 'Half Cash',
+    double_cash: 'Double Cash',
+    chimps_lite: 'CHIMPS lite',
+    no_fast_forward: 'No Fast Forward',
+    low_lives: 'Start with 1 life',
+  };
+
+  // --- Full tower save / restore (EXPERIMENTAL) ------------------------------
+  // Snapshot every non-stage clone's position, direction, size, visibility,
+  // costume, and local variables, plus the complete set of stage variables.
+  // Restore by disposing current clones and recreating them from the snapshot.
+  // The game's `control_start_as_clone` hats fire on makeClone(); we re-apply
+  // state twice (sync, then one-frame later) to outrun any init-script writes.
+  const FULL_KEY = 'btd5_full_snap_v1';
+  function snapshotFull() {
+    const rt = window.vm && window.vm.runtime;
+    if (!rt) return null;
+    const stage = rt.getTargetForStage();
+    const snap = { v: 1, t: Date.now(), stageVars: {}, clones: [] };
+    for (const id in stage.variables) {
+      const v = stage.variables[id];
+      snap.stageVars[v.name] = v.value;
+    }
+    for (const t of rt.targets) {
+      if (!t || t.isOriginal || t.isStage || !t.sprite) continue;
+      const vars = {};
+      for (const vid in t.variables) vars[t.variables[vid].name] = t.variables[vid].value;
+      snap.clones.push({
+        sprite: t.sprite.name,
+        x: t.x, y: t.y, direction: t.direction,
+        size: t.size, visible: t.visible,
+        costume: typeof t.currentCostume === 'number' ? t.currentCostume : 0,
+        vars,
+      });
+    }
+    return snap;
+  }
+  function saveFull() {
+    const snap = snapshotFull();
+    if (!snap) return null;
+    try { localStorage.setItem(FULL_KEY, JSON.stringify(snap)); } catch (e) {
+      return { error: String(e) };
+    }
+    return snap;
+  }
+  function loadFull() {
+    try {
+      const raw = localStorage.getItem(FULL_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+  function applyCloneState(target, entry) {
+    try {
+      if (typeof target.setXY === 'function') target.setXY(entry.x, entry.y);
+      if (typeof target.setDirection === 'function') target.setDirection(entry.direction);
+      if (typeof target.setSize === 'function') target.setSize(entry.size);
+      if (typeof target.setVisible === 'function') target.setVisible(!!entry.visible);
+      if (typeof target.setCostume === 'function') {
+        try { target.setCostume(entry.costume); } catch (e) {}
+      }
+      if (entry.vars) {
+        for (const vid in target.variables) {
+          const vObj = target.variables[vid];
+          if (Object.prototype.hasOwnProperty.call(entry.vars, vObj.name)) {
+            vObj.value = entry.vars[vObj.name];
+          }
+        }
+      }
+    } catch (e) {}
+  }
+  function restoreFull(snap) {
+    if (!snap || !snap.clones) return { created: 0, errors: ['empty snapshot'] };
+    const rt = window.vm && window.vm.runtime;
+    if (!rt) return { created: 0, errors: ['no runtime'] };
+    const errors = [];
+    // Stage variables first
+    const stage = rt.getTargetForStage();
+    for (const id in stage.variables) {
+      const v = stage.variables[id];
+      if (snap.stageVars && Object.prototype.hasOwnProperty.call(snap.stageVars, v.name)) {
+        v.value = snap.stageVars[v.name];
+      }
+    }
+    // Dispose existing clones (not originals)
+    const toRemove = rt.targets.filter((t) => t && !t.isOriginal && !t.isStage);
+    for (const t of toRemove) {
+      try { rt.disposeTarget(t); } catch (e) { errors.push('dispose: ' + e.message); }
+    }
+    // Rebuild clones from the snapshot. Note: makeClone() creates the clone but
+    // does NOT add it to runtime.targets; Scratch's own control_create_clone_of
+    // block does that push itself, and we have to do the same here.
+    let created = 0;
+    const pending = [];
+    for (const entry of snap.clones) {
+      const original = rt.targets.find((t) => t && t.isOriginal && t.sprite && t.sprite.name === entry.sprite);
+      if (!original || typeof original.makeClone !== 'function') continue;
+      const clone = original.makeClone();
+      if (!clone) continue;
+      rt.targets.push(clone);
+      if (typeof clone.goBehindOther === 'function') {
+        try { clone.goBehindOther(original); } catch (e) {}
+      }
+      applyCloneState(clone, entry);
+      pending.push([clone, entry]);
+      created++;
+    }
+    // Re-apply once more next frame to beat any clone-init script writes
+    requestAnimationFrame(() => {
+      for (const [clone, entry] of pending) {
+        if (!clone.sprite) continue; // already disposed
+        applyCloneState(clone, entry);
+      }
+    });
+    return { created, errors };
   }
 
   function guardReset(origFn, action) {
@@ -825,6 +1117,127 @@
     renderStatsPanel();
     setInterval(renderStatsPanel, 2000);
     panel.appendChild(statsSection);
+
+    // Achievements
+    const achSection = h('section');
+    achSection.appendChild(h('h3', null, 'Achievements'));
+    const achList = h('div', { className: 'dt-ach-list' });
+    achSection.appendChild(achList);
+    function renderAchievements() {
+      const unlocked = loadAchievements();
+      const total = ACHIEVEMENTS.length;
+      const done = ACHIEVEMENTS.filter((a) => unlocked[a.id]).length;
+      achList.innerHTML = '';
+      achList.appendChild(h('div', { className: 'dt-ach-count' }, `${done} / ${total} unlocked`));
+      for (const a of ACHIEVEMENTS) {
+        const on = !!unlocked[a.id];
+        const item = h('div', { className: 'dt-ach-item' + (on ? ' dt-ach-on' : '') },
+          h('span', { className: 'dt-ach-badge' }, on ? '✓' : '·'),
+          h('div', { style: { flex: '1 1 auto' } },
+            h('div', { className: 'dt-ach-name-small' }, a.name),
+            h('div', { className: 'dt-ach-desc-small' }, a.desc)));
+        achList.appendChild(item);
+      }
+    }
+    renderAchievements();
+    setInterval(renderAchievements, 4000);
+    panel.appendChild(achSection);
+
+    // Challenge of the Day
+    const cotdSection = h('section');
+    cotdSection.appendChild(h('h3', null, 'Challenge of the Day'));
+    cotdSection.appendChild(h('p', { className: 'dt-sub', style: { margin: '-6px 0 10px' } },
+      'A deterministic daily picked from the BTD6 map list. Everyone sees the same map, goal, and modifiers today.'));
+    const cotdCard = h('div', { className: 'dt-cotd-card' }, h('em', null, 'Loading…'));
+    cotdSection.appendChild(cotdCard);
+    panel.appendChild(cotdSection);
+    (async () => {
+      const c = await rollChallengeOfTheDay();
+      if (!c) {
+        cotdCard.innerHTML = '';
+        cotdCard.appendChild(h('em', null, 'Map data not loaded. Run scripts/update_btd6_maps.sh.'));
+        return;
+      }
+      const state = loadCotdState();
+      const done = state[c.date] && state[c.date].completed;
+      const streak = cotdStreak();
+      const renderCard = () => {
+        cotdCard.innerHTML = '';
+        cotdCard.appendChild(h('div', { className: 'dt-cotd-date' }, c.date + (streak > 1 ? ' · 🔥 ' + streak + '-day streak' : '')));
+        cotdCard.appendChild(h('div', { className: 'dt-cotd-map' },
+          h('span', { className: 'dt-badge dt-diff-' + c.difficulty.toLowerCase() }, c.difficulty),
+          h('span', { style: { marginLeft: '6px' } }, c.map.name)));
+        cotdCard.appendChild(h('div', { className: 'dt-cotd-goal' }, 'Goal: reach round ' + c.goal));
+        if (c.modifiers.length) {
+          const chips = h('div', { className: 'dt-cotd-mods' });
+          for (const m of c.modifiers) chips.appendChild(h('span', { className: 'dt-cotd-chip' }, COTD_MOD_LABELS[m] || m));
+          cotdCard.appendChild(chips);
+        }
+        const applyBtn = h('button', { type: 'button' }, 'Apply modifiers');
+        applyBtn.onclick = () => {
+          for (const m of c.modifiers) {
+            if (m === 'half_cash') setSetting('halfCash', true);
+            else if (m === 'double_cash') setSetting('doubleCash', true);
+            else if (m === 'chimps_lite') setSetting('chimpsLite', true);
+            else if (m === 'no_fast_forward') setSetting('inGameSpeed', 1);
+            else if (m === 'low_lives') { const lv = findStageVar('lives'); if (lv) lv.value = 1; }
+          }
+          applyBtn.textContent = 'Applied ✓';
+          setTimeout(() => (applyBtn.textContent = 'Apply modifiers'), 1500);
+        };
+        const doneBtn = h('button', { type: 'button' }, done ? 'Completed ✓' : 'Mark complete');
+        doneBtn.disabled = !!done;
+        doneBtn.onclick = () => { markCotdComplete(); renderCard(); };
+        cotdCard.appendChild(h('div', { style: { marginTop: '10px', display: 'flex', gap: '6px', flexWrap: 'wrap' } }, applyBtn, doneBtn));
+      };
+      renderCard();
+    })();
+
+    // Full Tower Save / Restore (EXPERIMENTAL)
+    const fullSection = h('section');
+    fullSection.appendChild(h('h3', null, 'Full Save / Restore (experimental)'));
+    fullSection.appendChild(h('div', { className: 'dt-note' },
+      'Snapshots every tower and sprite clone, not just the stage counters. Fragile: the Scratch runtime’s clone init scripts may overwrite some values, so your towers can look right but misbehave. Treat as a bonus, keep the plain Restore as the safe path.'));
+    const fullSaveBtn = h('button', { type: 'button' }, 'Save snapshot');
+    const fullLoadBtn = h('button', { type: 'button' }, 'Restore snapshot');
+    const fullStatus = h('small', { style: { display: 'block', marginTop: '6px', color: '#a0a0aa' } }, '');
+    function renderFullStatus() {
+      const s = loadFull();
+      if (!s) {
+        fullStatus.textContent = 'No snapshot saved.';
+        fullLoadBtn.disabled = true;
+      } else {
+        const ago = Math.max(0, Math.round((Date.now() - s.t) / 1000));
+        const ageStr = ago < 60 ? ago + 's' : ago < 3600 ? Math.round(ago / 60) + 'm' : Math.round(ago / 3600) + 'h';
+        fullStatus.textContent = `${s.clones.length} clones · ${Object.keys(s.stageVars || {}).length} stage vars · saved ${ageStr} ago`;
+        fullLoadBtn.disabled = false;
+      }
+    }
+    fullSaveBtn.onclick = () => {
+      const s = saveFull();
+      if (s && !s.error) {
+        fullSaveBtn.textContent = `Saved (${s.clones.length} clones) ✓`;
+      } else {
+        fullSaveBtn.textContent = s && s.error ? 'Error' : 'Failed';
+      }
+      renderFullStatus();
+      setTimeout(() => (fullSaveBtn.textContent = 'Save snapshot'), 1500);
+    };
+    fullLoadBtn.onclick = () => {
+      const snap = loadFull();
+      if (!snap) return;
+      if (!confirm(`Restore snapshot with ${snap.clones.length} clones? Existing towers will be removed and recreated.`)) return;
+      const r = restoreFull(snap);
+      fullLoadBtn.textContent = `Restored ${r.created} ✓`;
+      setTimeout(() => (fullLoadBtn.textContent = 'Restore snapshot'), 1500);
+    };
+    renderFullStatus();
+    setInterval(renderFullStatus, 3000);
+    fullSection.appendChild(h('div', { className: 'dt-row' },
+      h('div', null, 'Full snapshot'),
+      h('div', { style: { display: 'flex', gap: '6px' } }, fullSaveBtn, fullLoadBtn)));
+    fullSection.appendChild(fullStatus);
+    panel.appendChild(fullSection);
 
     // Game Modes (BTD5 demo's own difficulty broadcasts, exposed as quick-launch buttons)
     const modes = h('section');

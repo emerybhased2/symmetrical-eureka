@@ -243,3 +243,125 @@
   line-height: 1;
 }
 #dt-challenge button:hover { color: #fff; }
+
+/* CHIMPS failure banner */
+#dt-chimps-fail {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 70;
+  max-width: 90vw;
+  padding: 16px 22px;
+  border-radius: 10px;
+  background: rgba(127, 29, 29, 0.95);
+  border: 2px solid #ef4444;
+  color: #fff;
+  font: 14px/1.4 system-ui, sans-serif;
+  text-align: center;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+}
+#dt-chimps-fail strong { font-size: 18px; letter-spacing: 0.04em; }
+#dt-chimps-fail button {
+  margin-top: 4px;
+  padding: 6px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  cursor: pointer;
+}
+
+/* Achievement toast */
+.dt-achievement-toast {
+  position: fixed;
+  top: calc(16px + env(safe-area-inset-top));
+  left: 50%;
+  transform: translate(-50%, -20px);
+  z-index: 75;
+  min-width: 260px;
+  max-width: min(400px, 90vw);
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(234, 179, 8, 0.9), rgba(202, 138, 4, 0.9));
+  border: 1px solid rgba(253, 224, 71, 0.6);
+  color: #1a1a1a;
+  font: 13px/1.3 system-ui, sans-serif;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  opacity: 0;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+  pointer-events: none;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+}
+.dt-achievement-toast.dt-ach-show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+.dt-ach-icon { font-size: 22px; }
+.dt-ach-title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.7; }
+.dt-ach-name { font-weight: 700; font-size: 14px; }
+.dt-ach-desc { font-size: 11px; opacity: 0.85; }
+
+/* Achievements list (in panel) */
+#dt-panel .dt-ach-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 2px;
+  border-radius: 4px;
+}
+#dt-panel .dt-ach-count {
+  font-size: 11px;
+  color: #a0a0aa;
+  margin-bottom: 6px;
+}
+#dt-panel .dt-ach-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.03);
+  opacity: 0.5;
+}
+#dt-panel .dt-ach-item.dt-ach-on { opacity: 1; background: rgba(234, 179, 8, 0.1); }
+#dt-panel .dt-ach-badge {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #a0a0aa;
+}
+#dt-panel .dt-ach-on .dt-ach-badge { background: #eab308; color: #1a1a1a; font-weight: 700; }
+#dt-panel .dt-ach-name-small { font-size: 12px; font-weight: 600; }
+#dt-panel .dt-ach-desc-small { font-size: 11px; color: #a0a0aa; }
+
+/* Challenge of the Day */
+#dt-panel .dt-cotd-card {
+  padding: 12px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.12), rgba(236, 72, 153, 0.08));
+  border: 1px solid rgba(168, 85, 247, 0.3);
+}
+#dt-panel .dt-cotd-date { font-size: 10px; color: #a0a0aa; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+#dt-panel .dt-cotd-map { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+#dt-panel .dt-cotd-goal { font-size: 12px; color: #c084fc; margin-bottom: 8px; }
+#dt-panel .dt-cotd-mods { display: flex; flex-wrap: wrap; gap: 4px; }
+#dt-panel .dt-cotd-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 11px;
+  color: #d8d8e0;
+}
+#dt-panel .dt-cotd-card button { padding: 6px 12px; font-size: 12px; }

@@ -390,10 +390,79 @@
     } catch (e) { return null; }
   }
 
+  // --- Statistics tracker ----------------------------------------------------
+  // Counts games played (round 0 -> 1 transition only, so cheats don't inflate it),
+  // highest round / wave ever reached, and total time with the game running.
+  const STATS_KEY = 'btd5_stats_v1';
+  const DEFAULT_STATS = {
+    gamesPlayed: 0,
+    highestRound: 0,
+    highestWave: 0,
+    totalTimePlayed: 0, // seconds
+    lastPlayedAt: null,
+  };
+  function loadStats() {
+    try {
+      const raw = localStorage.getItem(STATS_KEY);
+      if (!raw) return { ...DEFAULT_STATS };
+      return { ...DEFAULT_STATS, ...(JSON.parse(raw) || {}) };
+    } catch (e) {
+      return { ...DEFAULT_STATS };
+    }
+  }
+  function saveStats(s) {
+    try { localStorage.setItem(STATS_KEY, JSON.stringify(s)); } catch (e) {}
+  }
+  function resetStats() {
+    try { localStorage.removeItem(STATS_KEY); } catch (e) {}
+  }
+
+  // Combined tick: autosave + stats bookkeeping. Runs every 5 s.
   let autosaveTimer = null;
+  let lastTickAt = Date.now();
+  let lastTickRound = 0;
+  let gameRunning = false;
+  function autoTick() {
+    const now = Date.now();
+    const dt = Math.min(10, (now - lastTickAt) / 1000); // clamp for sleep/background gaps
+    lastTickAt = now;
+    const vars = readStageVars();
+    const round = Number(vars.round) || 0;
+    const wave = Number(vars.wave) || 0;
+    const lives = Number(vars.lives) || 0;
+    // Snapshot
+    if (round > 0 || wave > 0) {
+      try {
+        localStorage.setItem(AUTOSAVE_KEY,
+          JSON.stringify({ t: now, reason: 'tick', vars }));
+      } catch (e) {}
+    }
+    // Stats transitions
+    const stats = loadStats();
+    // A real game-start: round went from 0 to 1 (ignores cheat-set rounds).
+    if (lastTickRound === 0 && round === 1 && !gameRunning) {
+      gameRunning = true;
+      stats.gamesPlayed += 1;
+      stats.lastPlayedAt = now;
+    }
+    // Game end: round rolled back to 0, or lives hit 0.
+    if (gameRunning && (round === 0 || lives === 0)) {
+      gameRunning = false;
+    }
+    if (gameRunning) {
+      stats.totalTimePlayed += dt;
+      if (round > stats.highestRound) stats.highestRound = round;
+      if (wave > stats.highestWave) stats.highestWave = wave;
+    }
+    saveStats(stats);
+    lastTickRound = round;
+  }
   function startAutosave() {
     if (autosaveTimer) return;
-    autosaveTimer = setInterval(() => saveSnapshot('tick'), 5000);
+    lastTickAt = Date.now();
+    lastTickRound = 0;
+    gameRunning = false;
+    autosaveTimer = setInterval(autoTick, 5000);
   }
 
   function guardReset(origFn, action) {
@@ -599,6 +668,20 @@
     dev.appendChild(makeCheat('Set money', 'money', 10000));
     dev.appendChild(makeCheat('Set lives', 'lives', 999));
     dev.appendChild(makeCheat('Set round', 'round', 30));
+
+    // Round skip quick buttons
+    const skipBtns = h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '4px', justifyContent: 'flex-end' } });
+    for (const r of [5, 10, 20, 30, 40, 50, 60, 80, 100]) {
+      const b = h('button', { type: 'button' }, 'R' + r);
+      b.style.cssText = 'padding:3px 7px;font-size:11px;min-width:34px';
+      b.onclick = () => {
+        setStageVar('round', r);
+        b.textContent = '✓';
+        setTimeout(() => (b.textContent = 'R' + r), 600);
+      };
+      skipBtns.appendChild(b);
+    }
+    dev.appendChild(row('Skip to round', skipBtns, 'Jump the round variable directly.'));
     const pauseBtn = h('button', { type: 'button' }, 'Pause');
     pauseBtn.onclick = () => {
       const vm = window.vm; if (!vm || !vm.setPaused) return;
@@ -638,12 +721,110 @@
     const restoreRow = h('div', { className: 'dt-row', style: { marginTop: '-4px' } },
       h('div', null, restoreStatus));
     dev.appendChild(restoreRow);
+
+    // Export / import autosave + stats + settings as a single JSON file
+    const exportBtn = h('button', { type: 'button' }, 'Export');
+    const importBtn = h('button', { type: 'button' }, 'Import');
+    const fileInput = h('input', { type: 'file', accept: 'application/json,.json' });
+    fileInput.style.display = 'none';
+    exportBtn.onclick = () => {
+      const payload = {
+        app: 'btd5-demo-v4-devtools',
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        autosave: loadSnapshot(),
+        stats: loadStats(),
+        settings: { ...settings },
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const a = h('a', { href: url, download: 'btd5-save-' + stamp + '.json' });
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 500);
+      exportBtn.textContent = 'Exported ✓';
+      setTimeout(() => (exportBtn.textContent = 'Export'), 1200);
+    };
+    fileInput.onchange = async (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      try {
+        const text = await f.text();
+        const data = JSON.parse(text);
+        if (data.app !== 'btd5-demo-v4-devtools') {
+          if (!confirm('This file was not exported by this app. Import anyway?')) {
+            fileInput.value = ''; return;
+          }
+        }
+        let n = 0;
+        if (data.autosave) { localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(data.autosave)); n++; }
+        if (data.stats) { localStorage.setItem(STATS_KEY, JSON.stringify(data.stats)); n++; }
+        if (data.settings && typeof data.settings === 'object') {
+          Object.assign(settings, data.settings);
+          try { localStorage.setItem(LS_KEY, JSON.stringify(settings)); } catch (err) {}
+          apply();
+          n++;
+        }
+        importBtn.textContent = 'Imported ' + n + ' section' + (n === 1 ? '' : 's') + ' ✓';
+        setTimeout(() => (importBtn.textContent = 'Import'), 1800);
+        refreshRestore();
+      } catch (err) {
+        alert('Import failed: ' + err.message);
+      } finally {
+        fileInput.value = ''; // allow re-import of the same file
+      }
+    };
+    importBtn.onclick = () => fileInput.click();
+    document.body.appendChild(fileInput);
+    const exImRow = h('div', { className: 'dt-row' },
+      h('div', null, 'Save file', h('small', null, 'JSON: autosave + stats + settings')),
+      h('div', { style: { display: 'flex', gap: '6px' } }, exportBtn, importBtn));
+    dev.appendChild(exImRow);
     const stats = h('div', { className: 'dt-stats' },
       h('div', null, h('span', null, 'render:'), h('span', null, 'WebGL')),
       h('div', null, h('span', null, 'ua:'), h('span', null, navigator.hardwareConcurrency ? navigator.hardwareConcurrency + '-core' : '?'))
     );
     dev.appendChild(stats);
     panel.appendChild(dev);
+
+    // Statistics (local-only, tracked by autoTick()).
+    const statsSection = h('section');
+    statsSection.appendChild(h('h3', null, 'Statistics'));
+    const statsGrid = h('div', { className: 'dt-stats' });
+    statsSection.appendChild(statsGrid);
+    const resetStatsBtn = h('button', { type: 'button' }, 'Reset');
+    resetStatsBtn.onclick = () => {
+      if (confirm('Clear all statistics? This cannot be undone.')) {
+        resetStats();
+        renderStatsPanel();
+      }
+    };
+    statsSection.appendChild(row('Clear counters', resetStatsBtn));
+    function renderStatsPanel() {
+      const s = loadStats();
+      const t = s.totalTimePlayed;
+      const hrs = Math.floor(t / 3600);
+      const mins = Math.floor((t % 3600) / 60);
+      const secs = Math.floor(t % 60);
+      const timeStr = hrs > 0 ? `${hrs}h ${mins}m` : mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+      const last = s.lastPlayedAt ? new Date(s.lastPlayedAt) : null;
+      const lastStr = last ? last.toLocaleString() : 'never';
+      statsGrid.innerHTML = '';
+      const pairs = [
+        ['Games played', String(s.gamesPlayed)],
+        ['Highest round', String(s.highestRound)],
+        ['Highest wave', String(s.highestWave)],
+        ['Time played', timeStr],
+        ['Last played', lastStr],
+      ];
+      for (const [k, v] of pairs) {
+        statsGrid.appendChild(h('div', null, h('span', null, k), h('span', null, v)));
+      }
+    }
+    renderStatsPanel();
+    setInterval(renderStatsPanel, 2000);
+    panel.appendChild(statsSection);
 
     // Game Modes (BTD5 demo's own difficulty broadcasts, exposed as quick-launch buttons)
     const modes = h('section');

@@ -33,6 +33,11 @@
   box-sizing: border-box;
   padding: 56px 16px calc(16px + env(safe-area-inset-bottom)) 16px;
   overflow-y: auto;
+  /* The body sets touch-action: none so the game canvas doesn't pan; override
+   * here so touch devices can scroll the panel content. */
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   background: rgba(15, 15, 20, 0.92);
   color: #e8e8ec;
   font: 13px/1.5 system-ui, sans-serif;

@@ -334,6 +334,124 @@
     document.body.appendChild(challengeEl);
   }
 
+  // --- Auto-save / restore --------------------------------------------------
+  // Rapid taps can accidentally hit the green-flag or stop-all buttons overlaid
+  // on the game, which restarts the Scratch project and wipes in-game progress.
+  // Guard those calls with a confirmation when a round is in progress, and keep
+  // a localStorage snapshot of the key stage variables so even an actual page
+  // reload (e.g. Safari discarding the tab under memory pressure) is recoverable.
+  const AUTOSAVE_KEY = 'btd5_autosave_v1';
+  const SAVED_VARS = [
+    'money', 'lives', 'round', 'wave', 'gametime',
+    'Fast Forward?', 'Former Fast Forward',
+    'longestTime', '☁ mostwaves', '☁ Global Pops',
+  ];
+
+  function readStageVars() {
+    const stage = window.vm && window.vm.runtime.getTargetForStage();
+    if (!stage) return {};
+    const out = {};
+    for (const id in stage.variables) {
+      const v = stage.variables[id];
+      if (SAVED_VARS.includes(v.name)) out[v.name] = v.value;
+    }
+    return out;
+  }
+  function writeStageVars(vars) {
+    const stage = window.vm && window.vm.runtime.getTargetForStage();
+    if (!stage) return 0;
+    let n = 0;
+    for (const id in stage.variables) {
+      const v = stage.variables[id];
+      if (Object.prototype.hasOwnProperty.call(vars, v.name)) {
+        v.value = vars[v.name];
+        n++;
+      }
+    }
+    return n;
+  }
+  function saveSnapshot(reason) {
+    try {
+      const vars = readStageVars();
+      // Only save if we're actually in a game (round > 0 or wave > 0)
+      if (!(Number(vars.round) > 0 || Number(vars.wave) > 0)) return;
+      localStorage.setItem(AUTOSAVE_KEY,
+        JSON.stringify({ t: Date.now(), reason: reason || 'tick', vars }));
+    } catch (e) {}
+  }
+  function loadSnapshot() {
+    try {
+      const raw = localStorage.getItem(AUTOSAVE_KEY);
+      if (!raw) return null;
+      const s = JSON.parse(raw);
+      if (!s || !s.vars) return null;
+      if (Date.now() - (s.t || 0) > 24 * 3600 * 1000) return null;
+      return s;
+    } catch (e) { return null; }
+  }
+
+  let autosaveTimer = null;
+  function startAutosave() {
+    if (autosaveTimer) return;
+    autosaveTimer = setInterval(() => saveSnapshot('tick'), 5000);
+  }
+
+  function guardReset(origFn, action) {
+    let confirming = false;
+    let lastResetAt = 0;
+    return function guarded(...args) {
+      const now = Date.now();
+      // Suppress a second fire within 1 s of a just-confirmed reset: iOS Safari
+      // can replay queued taps the moment the confirm closes.
+      if (confirming || now - lastResetAt < 1000) return undefined;
+      try {
+        const vars = readStageVars();
+        const round = Number(vars.round);
+        const wave = Number(vars.wave);
+        if (round > 0 || wave > 0) {
+          confirming = true;
+          const ok = window.confirm(
+            `${action} the game? Round ${round || 1}, wave ${wave || 1}, $${vars.money || 0}, ${vars.lives || 0} lives will be lost.\n\nTip: your progress is auto-saved; use "Restore saved progress" in the Settings panel to get it back.`
+          );
+          confirming = false;
+          if (!ok) return undefined;
+          saveSnapshot('pre-' + action.toLowerCase()); // one final save before reset
+        }
+        lastResetAt = Date.now();
+      } catch (e) {}
+      return origFn.apply(this, args);
+    };
+  }
+
+  function wrapScaffoldingResets() {
+    const sc = window.scaffolding;
+    if (!sc || sc.__btd5Guarded) return;
+    sc.__btd5Guarded = true;
+    if (typeof sc.greenFlag === 'function') {
+      const orig = sc.greenFlag.bind(sc);
+      sc.greenFlag = guardReset(orig, 'Restart');
+    }
+    if (typeof sc.stopAll === 'function') {
+      const orig = sc.stopAll.bind(sc);
+      sc.stopAll = guardReset(orig, 'Stop');
+    }
+  }
+
+  // Warn before unload if there's meaningful progress to lose.
+  function installBeforeUnload() {
+    window.addEventListener('beforeunload', (e) => {
+      try {
+        saveSnapshot('unload');
+        const vars = readStageVars();
+        if (Number(vars.round) > 0 || Number(vars.wave) > 0) {
+          e.preventDefault();
+          e.returnValue = ''; // required by some browsers; iOS Safari ignores it
+          return '';
+        }
+      } catch (err) {}
+    });
+  }
+
   // Spectate link: encodes the current game state (round/money/lives) in a URL fragment
   function makeSpectateLink() {
     const money = findStageVar('money'), lives = findStageVar('lives'), round = findStageVar('round');
@@ -492,6 +610,34 @@
     const greenBtn = h('button', { type: 'button' }, 'Green flag');
     greenBtn.onclick = () => window.scaffolding && window.scaffolding.greenFlag && window.scaffolding.greenFlag();
     dev.appendChild(row('Restart project', greenBtn));
+
+    // Restore the last auto-saved progress snapshot (money, lives, round, wave, FF?)
+    const restoreBtn = h('button', { type: 'button' }, 'Restore');
+    const restoreStatus = h('small', null, '');
+    const refreshRestore = () => {
+      const s = loadSnapshot();
+      if (s) {
+        const age = Math.max(0, Math.round((Date.now() - s.t) / 1000));
+        restoreStatus.textContent = `Saved ${age < 60 ? age + 's' : Math.round(age / 60) + 'm'} ago — round ${s.vars.round || '?'}, $${s.vars.money || 0}, ${s.vars.lives || 0} lives`;
+        restoreBtn.disabled = false;
+      } else {
+        restoreStatus.textContent = 'No recent auto-save (rounds > 0 auto-save every 5s).';
+        restoreBtn.disabled = true;
+      }
+    };
+    restoreBtn.onclick = () => {
+      const s = loadSnapshot();
+      if (!s) return;
+      const applied = writeStageVars(s.vars);
+      restoreBtn.textContent = 'Restored (' + applied + ') ✓';
+      setTimeout(() => (restoreBtn.textContent = 'Restore'), 1200);
+    };
+    setInterval(refreshRestore, 2000);
+    refreshRestore();
+    dev.appendChild(row('Restore saved progress', restoreBtn, ''));
+    const restoreRow = h('div', { className: 'dt-row', style: { marginTop: '-4px' } },
+      h('div', null, restoreStatus));
+    dev.appendChild(restoreRow);
     const stats = h('div', { className: 'dt-stats' },
       h('div', null, h('span', null, 'render:'), h('span', null, 'WebGL')),
       h('div', null, h('span', null, 'ua:'), h('span', null, navigator.hardwareConcurrency ? navigator.hardwareConcurrency + '-core' : '?'))
@@ -660,6 +806,9 @@
 
   onReady(() => {
     apply();
+    wrapScaffoldingResets();
+    installBeforeUnload();
+    startAutosave();
     buildPanel();
     ensureOverlay();
     renderSpectateBanner();
